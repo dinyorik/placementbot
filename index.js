@@ -1,12 +1,22 @@
+import express from "express";                    
 import { Telegraf, Markup } from "telegraf";
 import "dotenv/config";
 import { questions } from "./questions.js";
 import { evaluateAnswer } from "./gpt.js";
 import { calculateLevel } from "./score.js";
-import { generateFeedback } from "./feedback.js";
+import { generateFeedback } from "./feedback.js"; 
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
+const app = express();
 
+//чтобы Render видел, что сервис жив
+app.get("/", (req, res) => {
+  res.send("Placement bot is running ✅");
+});
+
+app.listen(PORT, () => {
+  console.log(`HTTP server is listening on port ${PORT}`);
+});
 // how many questions are asked in one test
 const MAX_QUESTIONS = 6;
 
