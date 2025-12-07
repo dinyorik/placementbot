@@ -1,3 +1,6 @@
+import net from "node:net";                 
+net.setDefaultAutoSelectFamily(false);
+
 import express from "express";
 import { Telegraf, Markup } from "telegraf";
 import "dotenv/config";
