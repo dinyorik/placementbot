@@ -25,3 +25,17 @@ export function calculateLevel(score, maxDifficulty = "medium") {
 
   return `${baseLevel}급`;
 }
+
+export function mapLevelToCEFR(level) {
+  // level у тебя в формате "1급", "2급" и т.п.
+  const n = parseInt(level, 10);
+
+  if (Number.isNaN(n)) return "A1"; // на всякий случай
+
+  if (n <= 1) return "A1";  // 1급 ~ A1
+  if (n === 2) return "A2"; // 2급 ~ A2
+  if (n === 3) return "B1"; // 3급 ~ B1
+  if (n === 4) return "B2"; // 4급 ~ B2
+  if (n === 5) return "C1"; // 5급 ~ C1
+  return "C2";              // 6급 ~ C2
+}

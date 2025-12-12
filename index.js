@@ -1,4 +1,4 @@
-import net from "node:net";                 
+import net from "node:net";
 net.setDefaultAutoSelectFamily(false);
 
 import express from "express";
@@ -6,7 +6,7 @@ import { Telegraf, Markup } from "telegraf";
 import "dotenv/config";
 import { questions } from "./questions.js";
 import { evaluateAnswer } from "./gpt.js";
-import { calculateLevel } from "./score.js";
+import { calculateLevel, mapLevelToCEFR } from "./score.js";
 import { generateFeedback } from "./feedback.js";
 
 const app = express();
@@ -50,7 +50,9 @@ function resetSession(id) {
     askedIds: [], // which questions were used
     currentQuestion: null, // last asked question
     maxDifficulty: "medium",
-    history: [] // [{questionId, difficulty, score, answer, comment}]
+    history: [], // [{questionId, difficulty, score, answer, comment}]
+    correctStreak: 0,  //  correct answers in a row (2 балла)
+    wrongStreak: 0     //  fails in a row (0 баллов)
   };
 }
 
@@ -72,14 +74,39 @@ function pickQuestion(user) {
 
 // ---- Update difficulty after an answer ----
 function updateDifficulty(user, answerScore) {
+  // подстрахуемся, если старые сессии без полей
+  if (user.correctStreak == null) user.correctStreak = 0;
+  if (user.wrongStreak == null) user.wrongStreak = 0;
+
   if (answerScore === 2) {
-    if (user.difficulty === "easy") user.difficulty = "medium";
-    else if (user.difficulty === "medium") user.difficulty = "hard";
+    user.correctStreak += 1;
+    user.wrongStreak = 0;
   } else if (answerScore === 0) {
-    if (user.difficulty === "hard") user.difficulty = "medium";
-    else if (user.difficulty === "medium") user.difficulty = "easy";
+    user.wrongStreak += 1;
+    user.correctStreak = 0;
+  } else {
+    // 1 балл — ни туда, ни сюда, сбрасываем серии
+    user.correctStreak = 0;
+    user.wrongStreak = 0;
   }
 
+  // ⬆️ повышаем сложность, если два раза подряд хорошо
+  if (user.correctStreak >= 2) {
+    if (user.difficulty === "easy") user.difficulty = "medium";
+    else if (user.difficulty === "medium") user.difficulty = "hard";
+
+    user.correctStreak = 0; // сбрасываем серию после апгрейда
+  }
+
+  // ⬇️ понижаем сложность, если два раза подряд плохо
+  if (user.wrongStreak >= 2) {
+    if (user.difficulty === "hard") user.difficulty = "medium";
+    else if (user.difficulty === "medium") user.difficulty = "easy";
+
+    user.wrongStreak = 0; // сбрасываем серию после даунгрейда
+  }
+
+  // не забываем про maxDifficulty
   const diffRank = { easy: 1, medium: 2, hard: 3 };
   if (diffRank[user.difficulty] > diffRank[user.maxDifficulty]) {
     user.maxDifficulty = user.difficulty;
@@ -119,45 +146,81 @@ async function sendQuestion(ctx) {
 
   // finish if we already asked MAX_QUESTIONS questions
   if (user.step >= MAX_QUESTIONS) {
-    const level = calculateLevel(user.score, user.maxDifficulty);
-    const finalFeedback = await generateFeedback(
-      level,
-      user.score,
-      user.maxDifficulty,
-      user.history
-    );
+  const level = calculateLevel(user.score, user.maxDifficulty);
+  const cefr = mapLevelToCEFR(level);  // 🔹 новый шаг
 
-    await ctx.reply(
-      `🎉 *Test completed!*\nYour level: *${level}*\n\nDetailed report:\n\n${finalFeedback}`,
-      { parse_mode: "Markdown" }
-    );
+  const finalFeedback = await generateFeedback(
+    level,
+    cefr,                // 🔹 новый аргумент
+    user.score,
+    user.maxDifficulty,
+    user.history
+  );
 
-    return;
-  }
+   await ctx.reply(
+    `🎉 *Test completed!*\n` +
+    `Your level: *${level}*  (roughly ~ *${cefr}*)\n\n` +
+    `Here is a detailed report:\n\n${finalFeedback}`,
+    {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text: "Start practicing Korean now! 🇰🇷",
+              url: "https://t.me/hangramkrbot"
+            }
+          ]
+        ]
+      }
+    }
+  );
+  return;
+}
 
   const q = pickQuestion(user);
   if (!q) {
     const level = calculateLevel(user.score, user.maxDifficulty);
     log(`NO MORE QUESTIONS user=${ctx.from.id} level=${level}`);
 
-    return ctx.reply(
-      `✅ Test completed!\nYour level: ${level}\n(Score: ${user.score})`,
-      restartKeyboard()
-    );
-  }
+     return ctx.reply(
+    `✅ Test is over!\nYour level: ${level}\n(Score: ${user.score})`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text: "Start practicing Korean now! 🇰🇷",
+              url: "https://t.me/hangrambot"
+            }
+          ]
+        ]
+      }
+    }
+  );
+}
 
   log(
     `Send Q (id=${q.id}, diff=${user.difficulty}) to user=${ctx.from.id}, step=${user.step}`
   );
 
   if (q.type === "choice") {
-    await ctx.reply(q.text, {
+    const keyboard = {
       reply_markup: {
         inline_keyboard: q.options.map((o, i) => [
           { text: o, callback_data: String(i) }
         ])
       }
-    });
+    };
+
+    if (q.imageUrl) {
+      await ctx.replyWithPhoto(q.imageUrl, {
+        caption: q.text,
+        ...keyboard
+      });
+    } else {
+      await ctx.reply(q.text, keyboard);
+    }
   } else {
     await ctx.reply(q.text, restartKeyboard());
   }
@@ -213,7 +276,7 @@ bot.on("callback_query", async ctx => {
     errorLog("callback error", e);
     try {
       await ctx.answerCbQuery("Error 😢");
-    } catch {}
+    } catch { }
   }
 });
 
